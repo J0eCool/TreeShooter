@@ -1,12 +1,23 @@
 import Graphics.UI.GLUT
 import Data.IORef
 
-data Ball a = Ball (a, a) a Bool
+--data Entity = Entity pos size vel
+data Entity = Entity (GLfloat, GLfloat) (GLfloat, GLfloat) (GLfloat, GLfloat)
+
+stageWidth = 0.8
+stageDim = 0.1
+paddleWidth = 0.3
+paddleHeight = 0.05
+paddleDist = 0.8
+ballDim = 0.05
 
 main = do
 	(_progName, _args) <- getArgsAndInitialize
 	_window <- createWindow "Oi"
-	worldState <- newIORef (0.0, 0.0, (Ball (0.0, 0.0) 0.0 True))
+	worldState <- newIORef (
+		(Entity (0.0, (-paddleDist)) (paddleWidth, paddleHeight) (0.0, 0.0)),
+		(Entity (0.0, paddleDist) (paddleWidth, paddleHeight) (0.0, 0.0)),
+		(Entity (0.0, 0.0) (ballDim, ballDim) (0.0, 1.0)))
 	keyState <- newIORef (False, False)
 	displayCallback $= display worldState
 	idleCallback $= Just (update worldState keyState)
@@ -22,29 +33,19 @@ drawRect x y w h = do
 		hh = h / 2
 		points = [(x - hw, y - hh, 0), (x + hw, y - hh, 0), (x + hw, y + hh, 0), (x - hw, y + hh, 0)]
 
-stageWidth = 0.8
-stageDim = 0.1
-paddleWidth = 0.3
-paddleHeight = 0.05
-paddleDist = 0.8
-ballDim = 0.05
+drawEntity (Entity (px, py) (sx, sy) _) = drawRect px py sx sy
 
 --display :: IORef GLfloat -> DisplayCallback
 display worldState = do
-	(playerPos, opponentPos, (Ball (ballX, ballY) _ _)) <- get worldState
+	(player, opponent, ball) <- get worldState
 	clear [ColorBuffer]
 	loadIdentity
 
-	-- draw ball
-	drawRect ballX ballY ballDim ballDim
+	mapM_ drawEntity [player, opponent, ball]
 
 	-- draw walls
 	drawRect (-stageWidth) 0 stageDim 2.0
 	drawRect stageWidth 0 stageDim 2.0
-
-	-- draw paddles
-	drawRect opponentPos paddleDist paddleWidth paddleHeight -- opponent
-	drawRect playerPos (-paddleDist) paddleWidth paddleHeight -- player
 
 	flush
 
@@ -53,7 +54,7 @@ clamp t lo hi
 	| t > hi = hi
 	| otherwise = t
 
---updateItem index list
+getXPos (Entity (x, _) _ _) = x
 
 --update :: IORef GLfloat -> IORef (Bool, Bool) -> IdleCallback
 update worldState keyState = do
@@ -61,33 +62,34 @@ update worldState keyState = do
 
 	-- update player
 	case ks of
-		(True, False) -> worldState $~! \(x, y, b) -> (clamp (x - playerSpeed) paddleLeftBound paddleRightBound, y, b)
-		(False, True) -> worldState $~! \(x, y, b) -> (clamp (x + playerSpeed) paddleLeftBound paddleRightBound, y, b)
+		(True, False) -> worldState $~! \(Entity (x, y) a b, op, ball) -> (Entity (clamp (x - playerSpeed) paddleLeftBound paddleRightBound, y) a b, op, ball)
+		(False, True) -> worldState $~! \(Entity (x, y) a b, op, ball) -> (Entity (clamp (x + playerSpeed) paddleLeftBound paddleRightBound, y) a b, op, ball)
 		_ -> worldState $~! \x -> x
 
 	-- update enemy
-	worldState $~! \(x, y, (Ball (bx, by) v t)) -> (x, if y > bx then y - opponentSpeed else y + opponentSpeed, (Ball (bx, by) v t))
+	worldState $~! \(pl, Entity (x, y) s v, (Entity (bx, by) bv t)) -> (pl, Entity (if x > bx then x - opponentSpeed else x + opponentSpeed, y) s v, (Entity (bx, by) bv t))
 
 	-- update ball
-	worldState $~! \(x, y, (Ball (bx, by) v t)) ->
+	worldState $~! \(x, y, (Entity (bx, by) s (vx, vy))) ->
 		let
-			padPos = if t then y else x
+			t = vy > 0.0
+			padPos = if t then getXPos y else getXPos x
 			d = (bx - padPos) / paddleWidth
 			didCollidePaddle = (if t then by > paddleDist else by < (-paddleDist)) && abs d < 1.0
 			didLeaveScreen = abs by > 1.0
 			didCollideWall = bx > ballRightBound || bx < ballLeftBound
 			newV = case (didCollideWall, didCollidePaddle, didLeaveScreen) of
-				(True, _, _) -> -v
-				(_, True, _) -> v + d / 2
-				(_, _, True) -> v / 2
-				_ -> v
-			newT = if didCollidePaddle || didLeaveScreen then not t else t
+				(True, _, _) -> -vx
+				(_, True, _) -> vx + d / 2
+				(_, _, True) -> vx / 2
+				_ -> vx
+			newT = if didCollidePaddle || didLeaveScreen then (-1) * vy else vy
 			dX = newV * ballSpeed
-			dY = if newT then ballSpeed else (-ballSpeed)
+			dY = if newT > 0 then ballSpeed else (-ballSpeed)
 			newPos = if didLeaveScreen
 				then (0.0, if t then 0.7 * paddleDist else (- 0.7) * paddleDist)
 				else (bx + dX, by + dY)
-		in (x, y, (Ball newPos newV newT))
+		in (x, y, (Entity newPos s (newV, newT)))
 
 	postRedisplay Nothing
 	where
