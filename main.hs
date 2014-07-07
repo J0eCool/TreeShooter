@@ -1,25 +1,32 @@
 import Graphics.UI.GLUT
 import Data.IORef
 
+data WorldState = WorldState 
+	{ entities :: [Entity]
+	, keyState :: (Bool, Bool)
+	}
+
 data Entity = Entity
 	{ pos :: (GLfloat, GLfloat)
 	, size :: (GLfloat, GLfloat)
 	, vel :: (GLfloat, GLfloat)
-	, draw :: Entity -> IO ()
+	, onDraw :: Entity -> IO ()
+	, onUpdate :: Entity -> (Bool, Bool) -> Entity
 	}
 
 main = do
 	(_progName, _args) <- getArgsAndInitialize
 	_window <- createWindow "Oi"
-	worldState <- newIORef [
-		(Entity (0.0, (-paddleDist)) (paddleWidth, paddleHeight) (0.0, 0.0) (drawEntityColor 0 1 1)),
-		(Entity (0.0, paddleDist) (paddleWidth, paddleHeight) (0.0, 0.0) drawEntity),
-		(Entity (0.0, 0.0) (ballDim, ballDim) (0.0, 1.0) drawEntity)]
-	keyState <- newIORef (False, False)
+	worldState <- newIORef $ WorldState [
+		Entity (0.0, (-paddleDist)) (paddleWidth, paddleHeight) (0.0, 0.0) (drawEntityColor 0 1 1) updatePlayer,
+		Entity (0.0, paddleDist) (paddleWidth, paddleHeight) (0.0, 0.0) drawEntity updateNull,
+		Entity (0.0, 0.0) (ballDim, ballDim) (0.0, 1.0) drawEntity updateNull
+		] (False, False)
 	displayCallback $= display worldState
-	idleCallback $= Just (update worldState keyState)
-	keyboardMouseCallback $= Just (input keyState)
+	idleCallback $= Just (update worldState)
+	keyboardMouseCallback $= Just (input worldState)
 	mainLoop
+	where
 
 stageWidth = 0.8
 stageDim = 0.1
@@ -46,13 +53,13 @@ drawEntityColor r g b e = do
 	drawEntity e
 	color $ Color3 1 1 (1 :: GLfloat)
 
---display :: IORef GLfloat -> DisplayCallback
+--display :: IORef [Entity] -> DisplayCallback
 display worldState = do
-	world <- get worldState
+	WorldState world _ <- readIORef worldState
 	clear [ColorBuffer]
 	loadIdentity
 
-	mapM_ (\e -> (draw e) e) world
+	mapM_ (\e -> (onDraw e) e) world
 
 	-- draw walls
 	drawRect (-stageWidth) 0 stageDim 2.0
@@ -67,60 +74,79 @@ clamp t lo hi
 
 getXPos = fst . pos
 
---update :: IORef GLfloat -> IORef (Bool, Bool) -> IdleCallback
-update worldState keyState = do
-	ks <- get keyState
+playerSpeed = 0.0002
+opponentSpeed = 0.0001
+ballSpeed = 0.0003
+left = (stageDim / 2) - stageWidth
+right = stageWidth - (stageDim / 2)
+paddleLeftBound = (paddleWidth / 2) + left
+paddleRightBound = right - (paddleWidth / 2)
+ballLeftBound = (ballDim / 2) + left
+ballRightBound = right - (ballDim / 2)
 
-	-- update player
-	case ks of
-		(True, False) -> worldState $~! \[Entity (x, y) a b d, op, ball] -> [Entity (clamp (x - playerSpeed) paddleLeftBound paddleRightBound, y) a b d, op, ball]
-		(False, True) -> worldState $~! \[Entity (x, y) a b d, op, ball] -> [Entity (clamp (x + playerSpeed) paddleLeftBound paddleRightBound, y) a b d, op, ball]
-		_ -> worldState $~! \x -> x
+updateNull entity worldState = entity
 
-	-- update enemy
-	worldState $~! \[pl, Entity (x, y) s v d, (Entity (bx, by) bv t bd)] -> [pl, Entity (if x > bx then x - opponentSpeed else x + opponentSpeed, y) s v d, Entity (bx, by) bv t bd]
+--getInputState entity =
 
-	-- update ball
-	worldState $~! \[x, y, (Entity (bx, by) s (vx, vy) bd)] ->
-		let
-			t = vy > 0.0
-			padPos = if t then getXPos y else getXPos x
-			d = (bx - padPos) / paddleWidth
-			didCollidePaddle = (if t then by > paddleDist else by < (-paddleDist)) && abs d < 1.0
-			didLeaveScreen = abs by > 1.0
-			didCollideWall = bx > ballRightBound || bx < ballLeftBound
-			newV = case (didCollideWall, didCollidePaddle, didLeaveScreen) of
-				(True, _, _) -> -vx
-				(_, True, _) -> vx + d / 2
-				(_, _, True) -> vx / 2
-				_ -> vx
-			newT = if didCollidePaddle || didLeaveScreen then (-1) * vy else vy
-			dX = newV * ballSpeed
-			dY = if newT > 0 then ballSpeed else (-ballSpeed)
-			newPos = if didLeaveScreen
-				then (0.0, if t then 0.7 * paddleDist else (- 0.7) * paddleDist)
-				else (bx + dX, by + dY)
-		in [x, y, (Entity newPos s (newV, newT) bd)]
+
+updatePlayer entity input = newEntity
+	where
+		(x, y) = pos entity
+		newX =
+			case input of
+				(True, False) -> clamp (x - playerSpeed) paddleLeftBound paddleRightBound
+				(False, True) -> clamp (x + playerSpeed) paddleLeftBound paddleRightBound
+				_ -> x
+		newEntity = entity { pos = (newX, y) }
+
+
+--update :: WorldState -> IORef (Bool, Bool) -> IdleCallback
+update worldState = do
+	world <- readIORef worldState
+
+	writeIORef worldState $ WorldState (map (\e -> onUpdate e e (keyState world)) (entities world)) (keyState world)
+
+	---- update player
+	--case ks of
+	--	(True, False) -> worldState $~! \[Entity (x, y) a b d, op, ball] -> [Entity (clamp (x - playerSpeed) paddleLeftBound paddleRightBound, y) a b d, op, ball]
+	--	(False, True) -> worldState $~! \[Entity (x, y) a b d, op, ball] -> [Entity (clamp (x + playerSpeed) paddleLeftBound paddleRightBound, y) a b d, op, ball]
+	--	_ -> worldState $~! \x -> x
+
+	---- update enemy
+	--worldState $~! \[pl, Entity (x, y) s v d, (Entity (bx, by) bv t bd)] -> [pl, Entity (if x > bx then x - opponentSpeed else x + opponentSpeed, y) s v d, Entity (bx, by) bv t bd]
+
+	---- update ball
+	--worldState $~! \[x, y, (Entity (bx, by) s (vx, vy) bd)] ->
+	--	let
+	--		t = vy > 0.0
+	--		padPos = if t then getXPos y else getXPos x
+	--		d = (bx - padPos) / paddleWidth
+	--		didCollidePaddle = (if t then by > paddleDist else by < (-paddleDist)) && abs d < 1.0
+	--		didLeaveScreen = abs by > 1.0
+	--		didCollideWall = bx > ballRightBound || bx < ballLeftBound
+	--		newV = case (didCollideWall, didCollidePaddle, didLeaveScreen) of
+	--			(True, _, _) -> -vx
+	--			(_, True, _) -> vx + d / 2
+	--			(_, _, True) -> vx / 2
+	--			_ -> vx
+	--		newT = if didCollidePaddle || didLeaveScreen then (-1) * vy else vy
+	--		dX = newV * ballSpeed
+	--		dY = if newT > 0 then ballSpeed else (-ballSpeed)
+	--		newPos = if didLeaveScreen
+	--			then (0.0, if t then 0.7 * paddleDist else (- 0.7) * paddleDist)
+	--			else (bx + dX, by + dY)
+	--	in [x, y, (Entity newPos s (newV, newT) bd)]
 
 	postRedisplay Nothing
-	where
-		playerSpeed = 0.0002
-		opponentSpeed = 0.0001
-		ballSpeed = 0.0003
-		left = (stageDim / 2) - stageWidth
-		right = stageWidth - (stageDim / 2)
-		paddleLeftBound = (paddleWidth / 2) + left
-		paddleRightBound = right - (paddleWidth / 2)
-		ballLeftBound = (ballDim / 2) + left
-		ballRightBound = right - (ballDim / 2)
+	--where
 
 --input :: IORef (Bool, Bool) -> KeyboardMouseCallback
-input keyState key Down _ _ = case key of
-	(SpecialKey KeyLeft) -> keyState $~! \(x, y) -> (True, y)
-	(SpecialKey KeyRight) -> keyState $~! \(x, y) -> (x, True)
+input worldState key Down _ _ = case key of
+	(SpecialKey KeyLeft) -> worldState $~! \x -> x { keyState = (True, snd $ keyState x) }
+	(SpecialKey KeyRight) -> worldState $~! \x -> x { keyState = (fst $ keyState x, True) }
 	_ -> return ()
-input keyState key Up _ _ = case key of
-	(SpecialKey KeyLeft) -> keyState $~! \(x, y) -> (False, y)
-	(SpecialKey KeyRight) -> keyState $~! \(x, y) -> (x, False)
+input worldState key Up _ _ = case key of
+	(SpecialKey KeyLeft) -> worldState $~! \x -> x { keyState = (False, snd $ keyState x) }
+	(SpecialKey KeyRight) -> worldState $~! \x -> x { keyState = (fst $ keyState x, False) }
 	_ -> return ()
 --input _ _ _ _ _ = return ()
