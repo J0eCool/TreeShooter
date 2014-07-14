@@ -9,6 +9,8 @@ import FRP.Elerea.Param
 import Graphics.UI.GLFW as GLFW
 import Graphics.Rendering.OpenGL
 
+import Util.Vector
+
 data InputState = InputState
     { _isClosed :: Bool
     , _mouseClicked :: Bool
@@ -50,17 +52,17 @@ readInput worldState = do
 
     world <- readIORef worldState
 
-    let c = world ^. inputState . isClosed
-
-    m <- (== Press) <$> getKey ENTER
+    m <- (== Press) <$> getMouseButton ButtonLeft
     writeIORef worldState
         (world & inputState . mouseClicked .~ m)
 
+    let c = world ^. inputState . isClosed
     k <- (== Press) <$> getKey ESC
     return (if c || k then Nothing else Just dt)
 
-renderRect :: GLfloat -> GLfloat -> GLfloat -> GLfloat -> IO ()
-renderRect x y w h = renderPrimitive Quads $ mapM_ vert points
+renderRect :: Vec2 -> Vec2 -> IO ()
+renderRect (Vec2 x y) (Vec2 w h) =
+    renderPrimitive Quads $ mapM_ vert points
     where
         (hw, hh) = (w / 2, h / 2)
         vert (x, y) = vertex $ Vertex3 x y (0 :: GLfloat)
@@ -77,9 +79,12 @@ render world = do
     m <- (^. inputState . mouseClicked) <$> world
     clear [ColorBuffer]
 
-    let setC r g b = color $ Color3 r g (b :: GLfloat)
-    if m then setC 1 0 0 else setC 1 1 1
-    renderRect (cos t) (sin t) 0.3 0.3
+    let
+        setC r g b = color $ Color3 r g (b :: GLfloat)
+        pos = 0.4 .*/ unitVec t
+        size = Vec2 1 (abs . cos $ t) /*. 0.3
+    if m then setC 1 0 0 else setC 1 1 (mag size)
+    renderRect pos size
 
     flush
     swapBuffers
@@ -88,15 +93,16 @@ main = do
     let (winWidth, winHeight) = (800, 800)
 
     initialize
-    openWindow (Size winWidth winHeight) [DisplayRGBBits 8 8 8, DisplayAlphaBits 8] Window
+    openWindow (Size winWidth winHeight)
+        [DisplayRGBBits 8 8 8, DisplayAlphaBits 8] Window
     windowTitle $= "Ello boyo"
 
     world <- newIORef $ newWorldState
     windowCloseCallback $= do
         w <- readIORef world
-        (writeIORef world
+        writeIORef world
             (w & inputState . isClosed .~ True)
-            >> return True)
+            >> return True
     initGL
 
     game <- start $ do
