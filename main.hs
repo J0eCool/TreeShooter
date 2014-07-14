@@ -1,22 +1,14 @@
 import Graphics.UI.GLUT
 import Data.IORef
 
+import Util.Vector
+
 data WorldState = WorldState
 	{ entities :: [Entity]
 	, heldKeys :: [Key]
 	, pressedKeys :: [Key]
 	, mousePos :: Vec2
 	}
-
-data Vec2 = Vec2
-	{ x :: GLfloat
-	, y :: GLfloat
-	} deriving (Eq, Show)
-
-(Vec2 x1 y1) /+ (Vec2 x2 y2) = Vec2 (x1 + x2) (y1 + y2)
-(Vec2 x1 y1) /- (Vec2 x2 y2) = Vec2 (x1 - x2) (y1 - y2)
-s /.* (Vec2 x y) = Vec2 (s * x) (s * y)
-(Vec2 x1 y1) /* (Vec2 x2 y2) = Vec2 (x1 * x2) (y1 * y2)
 
 data UpdateData = UpdateData
 	{ newState :: Entity
@@ -93,13 +85,13 @@ updateNull entity worldState = UpdateData entity [] []
 
 updateVel :: Entity -> WorldState -> UpdateData
 updateVel entity worldState = UpdateData newEntity [] []
-	where newEntity = entity { pos = pos entity /+ vel entity }
+	where newEntity = entity { pos = pos entity /+/ vel entity }
 
 updatePlayer :: Entity -> WorldState -> UpdateData
 updatePlayer entity worldState = UpdateData newEntity added removed
 	where
 		m = mousePos worldState
-		newPos = Vec2 2 (-2) /* (m /- Vec2 0.5 0.5)
+		newPos = Vec2 2 (-2) /*/ (m /-/ Vec2 0.5 0.5)
 
 		isHeld x = x `elem` heldKeys worldState
 		isDown x = x `elem` pressedKeys worldState
