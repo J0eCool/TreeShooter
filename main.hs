@@ -1,7 +1,7 @@
 import Graphics.UI.GLUT
 import Data.IORef
 
-data WorldState = WorldState 
+data WorldState = WorldState
 	{ entities :: [Entity]
 	, heldKeys :: [Key]
 	, pressedKeys :: [Key]
