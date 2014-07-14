@@ -1,24 +1,27 @@
-{-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE RecursiveDo, TemplateHaskell #-}
 
 import Control.Applicative
 import Control.Concurrent
 import Control.Monad
+import Control.Lens
 import Data.IORef
 import FRP.Elerea.Param
 import Graphics.UI.GLFW as GLFW
 import Graphics.Rendering.OpenGL
 
 data InputState = InputState
-    { isClosed :: Bool
-    , mouseClicked :: Bool
+    { _isClosed :: Bool
+    , _mouseClicked :: Bool
     }
+makeLenses ''InputState
 newInputState :: InputState
 newInputState = InputState False False
 
 data WorldState = WorldState
-    { timeElapsed :: Double
-    , inputState :: InputState
+    { _timeElapsed :: Double
+    , _inputState :: InputState
     }
+makeLenses ''WorldState
 newWorldState :: WorldState
 newWorldState = WorldState 0 newInputState
 
@@ -40,19 +43,18 @@ driveNetwork network driver = do
 
 readInput :: IORef WorldState -> IO (Maybe Double)
 readInput worldState = do
-    threadDelay 0
+    dt <- get GLFW.time
+    GLFW.time $= 0
+
+    threadDelay $ floor $ 1000000 * (1 - dt) / 60
 
     world <- readIORef worldState
 
-    let c = isClosed . inputState $ world
-
-    dt <- get GLFW.time
-    GLFW.time $= 0
-    -- let dt = 0.16
+    let c = world ^. inputState . isClosed
 
     m <- (== Press) <$> getKey ENTER
     writeIORef worldState
-        (world {inputState=((inputState world) {mouseClicked=m})})
+        (world & inputState . mouseClicked .~ m)
 
     k <- (== Press) <$> getKey ESC
     return (if c || k then Nothing else Just dt)
@@ -71,8 +73,8 @@ renderRect x y w h = renderPrimitive Quads $ mapM_ vert points
 
 render :: IO WorldState -> IO ()
 render world = do
-    t <- realToFrac <$> timeElapsed <$> world
-    m <- mouseClicked <$> inputState <$> world
+    t <- realToFrac <$> (^. timeElapsed) <$> world
+    m <- (^. inputState . mouseClicked) <$> world
     clear [ColorBuffer]
 
     let setC r g b = color $ Color3 r g (b :: GLfloat)
@@ -93,20 +95,16 @@ main = do
     windowCloseCallback $= do
         w <- readIORef world
         (writeIORef world
-            (w {inputState=((inputState w) {isClosed=True})})
+            (w & inputState . isClosed .~ True)
             >> return True)
     initGL
-
-
-    -- game <- start $ stateful 0 (+)
-    -- forM (take 10 [1,1..]) game >>= print
 
     game <- start $ do
 
 
         let acc dt world = do
             w <- world
-            return w {timeElapsed = timeElapsed w + dt}
+            return $ w & timeElapsed %~ (+ dt)
         signal <- stateful (readIORef world) acc >>= delay (readIORef world)
 
         return $ render <$> signal
