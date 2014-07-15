@@ -20,12 +20,13 @@ newInputState :: InputState
 newInputState = InputState False False
 
 data WorldState = WorldState
-    { _timeElapsed :: Double
+    { _dT :: GLfloat
+    , _timeElapsed :: GLfloat
     , _inputState :: InputState
     }
 makeLenses ''WorldState
 newWorldState :: WorldState
-newWorldState = WorldState 0 newInputState
+newWorldState = WorldState 0 0 newInputState
 
 initGL :: IO ()
 initGL = do
@@ -34,18 +35,18 @@ initGL = do
     blendFunc $= (SrcAlpha, OneMinusSrcAlpha)
     cullFace $= Just Back
 
-driveNetwork :: (a -> IO (IO b)) -> IO (Maybe a) -> IO ()
+driveNetwork :: (IO a -> IO (IO b)) -> IO (Maybe (IO a)) -> IO ()
 driveNetwork network driver = do
-    dt <- driver
-    case dt of
-        Just dt -> do
-            join (network dt)
+    output <- driver
+    case output of
+        Just output -> do
+            join (network output)
             driveNetwork network driver
         Nothing -> return ()
 
-readInput :: IORef WorldState -> IO (Maybe Double)
+readInput :: IORef WorldState -> IO (Maybe (IO WorldState))
 readInput worldState = do
-    dt <- get GLFW.time
+    dt <- realToFrac <$> get GLFW.time
     GLFW.time $= 0
 
     threadDelay $ floor $ 1000000 * (1 - dt) / 60
@@ -54,11 +55,12 @@ readInput worldState = do
 
     m <- (== Press) <$> getMouseButton ButtonLeft
     writeIORef worldState
-        (world & inputState . mouseClicked .~ m)
+        (world & inputState . mouseClicked .~ m
+            & dT .~ dt)
 
     let c = world ^. inputState . isClosed
     k <- (== Press) <$> getKey ESC
-    return (if c || k then Nothing else Just dt)
+    return (if c || k then Nothing else Just (return world))
 
 renderRect :: Vec2 -> Vec2 -> IO ()
 renderRect (Vec2 x y) (Vec2 w h) =
@@ -89,6 +91,19 @@ render world = do
     flush
     swapBuffers
 
+worldUpdate :: IO WorldState -> IO WorldState -> IO WorldState
+worldUpdate input state = do
+    i <- input
+    s <- state
+    return $ s & timeElapsed %~ (\x -> (i ^. dT) + x)
+
+update :: IORef WorldState -> SignalGen (IO WorldState) (Signal (IO ()))
+update worldState = do
+    let world = readIORef worldState
+    signal <- delay world =<< stateful world worldUpdate
+
+    return $ render <$> signal
+
 main = do
     let (winWidth, winHeight) = (800, 800)
 
@@ -105,15 +120,7 @@ main = do
             >> return True
     initGL
 
-    game <- start $ do
-
-
-        let acc dt world = do
-            w <- world
-            return $ w & timeElapsed %~ (+ dt)
-        signal <- stateful (readIORef world) acc >>= delay (readIORef world)
-
-        return $ render <$> signal
+    game <- start $ update world
 
     driveNetwork game (readInput world)
 
