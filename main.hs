@@ -1,145 +1,143 @@
-import Graphics.UI.GLUT
-import Data.IORef
+{-# LANGUAGE RecursiveDo, TemplateHaskell #-}
 
+import Control.Applicative
+import Control.Concurrent
+import Control.Monad
+import Control.Lens
+import Data.IORef
+import FRP.Elerea.Param
+import Graphics.UI.GLFW as GLFW
+import Graphics.Rendering.OpenGL
+
+import Engine.Entity
 import Util.Vector
 
+data InputState = InputState
+	{ _isClosed :: Bool
+	, _mouseClicked :: Bool
+	}
+makeLenses ''InputState
+newInputState :: InputState
+newInputState = InputState False False
+
 data WorldState = WorldState
-	{ entities :: [Entity]
-	, heldKeys :: [Key]
-	, pressedKeys :: [Key]
-	, mousePos :: Vec2
+	{ _dT :: GLfloat
+	, _timeElapsed :: GLfloat
+	, _inputState :: InputState
+
+	, _player :: Entity
 	}
+makeLenses ''WorldState
+newWorldState :: WorldState
+newWorldState = WorldState 0 0 newInputState newEntity
 
-data UpdateData = UpdateData
-	{ newState :: Entity
-	, toAdd :: [Entity]
-	, toRemove :: [Entity]
-	}
+initGL :: IO ()
+initGL = do
+	clearColor $= Color4 0 0 0 1
+	blend $= Enabled
+	blendFunc $= (SrcAlpha, OneMinusSrcAlpha)
+	cullFace $= Just Back
 
-data Entity = Entity
-	{ pos :: Vec2
-	, size :: Vec2
-	, vel :: Vec2
-	, onDraw :: Entity -> IO ()
-	, onUpdate :: Entity -> WorldState -> UpdateData
-	}
-instance Eq Entity where
-	Entity p1 s1 v1 _ _ == Entity p2 s2 v2 _ _ = (p1 == p2) && (s1 == s2) && (v1 == v2)
+driveNetwork :: (IO a -> IO (IO b)) -> IO (Maybe (IO a)) -> IO ()
+driveNetwork network driver = do
+	output <- driver
+	case output of
+		Just output -> do
+			join (network output)
+			driveNetwork network driver
+		Nothing -> return ()
 
-main :: IO ()
-main = do
-	(_progName, _args) <- getArgsAndInitialize
-	_window <- createWindow "Shooter"
-	worldState <- newIORef $ WorldState [
-		Entity (Vec2 0.0 0.0) (Vec2 shipDim shipDim) (Vec2 0.0 0.0) (drawEntityColor 0 1 0) updatePlayer
-		] [] [] (Vec2 0 0)
-	displayCallback $= display worldState
-	idleCallback $= Just (update worldState)
-	keyboardMouseCallback $= Just (input worldState)
-	motionCallback $= Just (mouseMotion worldState)
-	passiveMotionCallback $= Just (mouseMotion worldState)
-	mainLoop
+readInput :: IORef WorldState -> IO (Maybe (IO WorldState))
+readInput worldState = do
+	dt <- realToFrac <$> get GLFW.time
+	GLFW.time $= 0
 
-shipDim = 0.08
+	threadDelay $ floor $ 1000000 * (1 - dt) / 60
 
-drawRect :: GLfloat -> GLfloat -> GLfloat -> GLfloat -> IO ()
-drawRect x y w h = do
-	renderPrimitive Quads $
-		mapM_ (\(x, y, z) -> vertex $ Vertex3 x y z) points
-	where
-		points :: [(GLfloat, GLfloat, GLfloat)]
-		hw = w / 2
-		hh = h / 2
-		points = [(x - hw, y - hh, 0), (x + hw, y - hh, 0), (x + hw, y + hh, 0), (x - hw, y + hh, 0)]
-
-drawEntity :: Entity -> IO ()
-drawEntity e = drawRect px py sx sy
-	where
-		Vec2 px py = pos e
-		Vec2 sx sy = size e
-
-drawEntityColor :: GLfloat -> GLfloat -> GLfloat -> Entity -> IO ()
-drawEntityColor r g b e = do
-	color $ Color3 r g b
-	drawEntity e
-	color $ Color3 1 1 (1 :: GLfloat)
-
-display :: IORef WorldState -> DisplayCallback
-display worldState = do
 	world <- readIORef worldState
-	clear [ColorBuffer]
-	loadIdentity
 
-	mapM_ (\e -> (onDraw e) e) (entities world)
+	m <- (== Press) <$> getMouseButton ButtonLeft
+	writeIORef worldState
+		(world & inputState . mouseClicked .~ m
+			& dT .~ dt)
+
+	let c = world ^. inputState . isClosed
+	k <- (== Press) <$> getKey ESC
+	return (if c || k then Nothing else Just (return world))
+
+renderRect :: Vec2 -> Vec2 -> IO ()
+renderRect (Vec2 x y) (Vec2 w h) =
+	renderPrimitive Quads $ mapM_ vert points
+	where
+		(hw, hh) = (w / 2, h / 2)
+		vert (x, y) = vertex $ Vertex3 x y (0 :: GLfloat)
+		points =
+			[ (x - hw, y - hh)
+			, (x + hw, y - hh)
+			, (x + hw, y + hh)
+			, (x - hw, y + hh)
+			]
+
+drawEnt :: Entity -> IO ()
+drawEnt entity = renderRect (entity ^. pos) (entity ^. size)
+
+render :: IO WorldState -> IO ()
+render world = do
+	w <- world
+	let
+		t = realToFrac $ (^. timeElapsed) $ w
+		m = (^. inputState . mouseClicked) $ w
+
+	clear [ColorBuffer]
+
+	let
+		setC r g b = color $ Color3 r g (b :: GLfloat)
+		pos = 0.4 .*/ unitVec t
+		size = Vec2 1 (abs . cos $ t) /*. 0.3
+	if m then setC 1 0 0 else setC 1 1 (mag size)
+	renderRect pos size
+
+	let p = w ^. player
+	p ^. onDraw $ p
 
 	flush
+	swapBuffers
 
-clamp :: (Ord a) => a -> a -> a -> a
-clamp t lo hi
-	| t < lo = lo
-	| t > hi = hi
-	| otherwise = t
+worldUpdate :: IO WorldState -> IO WorldState -> IO WorldState
+worldUpdate input state = do
+	i <- input
+	s <- state
 
-updateNull :: Entity -> WorldState -> UpdateData
-updateNull entity worldState = UpdateData entity [] []
+	return $ s & timeElapsed +~ i ^. dT
 
-updateVel :: Entity -> WorldState -> UpdateData
-updateVel entity worldState = UpdateData newEntity [] []
-	where newEntity = entity { pos = pos entity /+/ vel entity }
-
-updatePlayer :: Entity -> WorldState -> UpdateData
-updatePlayer entity worldState = UpdateData newEntity added removed
-	where
-		m = mousePos worldState
-		newPos = Vec2 2 (-2) /*/ (m /-/ Vec2 0.5 0.5)
-
-		isHeld x = x `elem` heldKeys worldState
-		isDown x = x `elem` pressedKeys worldState
-		newSize = Vec2
-			(if isHeld (Char 'a') then shipDim * 0.5 else shipDim)
-			(if isHeld (MouseButton LeftButton) then 2 * shipDim else (if isHeld (Char 'g') then shipDim * 0.5 else shipDim))
-
-		newEntity = entity { pos = newPos } { size = newSize }
-
-		added = if isDown (MouseButton LeftButton)
-			then [Entity newPos (Vec2 0.025 0.025) (Vec2 0 0.001) (drawEntityColor 1 0 0) updateVel]
-			else []
-
-		ents = entities worldState
-		removed = if length ents > 5
-			then [ents !! 1]
-			else []
-
-update :: IORef WorldState -> IdleCallback
+update :: IORef WorldState -> SignalGen (IO WorldState) (Signal (IO ()))
 update worldState = do
-	world <- readIORef worldState
+	let world = readIORef worldState
+	signal <- delay world =<< stateful world worldUpdate
 
-	windowTitle $= "Shooter " ++ (show $ length $ entities world)
+	return $ render <$> signal
 
-	writeIORef worldState $ let
-		compact updates = foldr (\(UpdateData e a r) (es, as, rs) -> (e:es, a ++ as, r ++ rs)) ([], [], []) updates
-		(ents, adds, rems) = compact $ map (\e -> onUpdate e e world) (entities world)
-		newEnts = filter (not . (`elem` rems)) (ents ++ adds)
-		in world { entities = newEnts } { pressedKeys = []}
+main = do
+	let (winWidth, winHeight) = (800, 800)
 
-	postRedisplay Nothing
+	initialize
+	openWindow (Size winWidth winHeight)
+		[DisplayRGBBits 8 8 8, DisplayAlphaBits 8] Window
+	windowTitle $= "Ello boyo"
 
-input :: IORef WorldState -> KeyboardMouseCallback
-input worldState key state _ _ = do
-	world <- readIORef worldState
-	let
-		f = if state == Down
-			then \l -> key : l
-			else \l -> filter (not . (== key)) l
-		nowHeld = f $ heldKeys world
-		f' = if state == Down
-			then \l -> key : l
-			else id
-		nowPressed = f' $ pressedKeys world
-	worldState $~! \w -> w { heldKeys = nowHeld } { pressedKeys = nowPressed }
+	world <- newIORef $ newWorldState
+	w <- readIORef world
+	writeIORef world $ w {_player =
+		Entity (Vec2 0.5 0) (Vec2 0.25 0.4) vZero drawEnt}
+	windowCloseCallback $= do
+		w <- readIORef world
+		writeIORef world
+			(w & inputState . isClosed .~ True)
+			>> return True
+	initGL
 
-mouseMotion :: IORef WorldState -> MotionCallback
-mouseMotion worldState (Position x y) = do
-	Size wx wy <- get windowSize
-	let winPos = Vec2 ((fromIntegral x) / (fromIntegral wx)) ((fromIntegral y) / (fromIntegral wy))
-	worldState $~! \w -> w { mousePos = winPos }
+	game <- start $ update world
+
+	driveNetwork game (readInput world)
+
+	closeWindow
