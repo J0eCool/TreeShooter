@@ -1,11 +1,15 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 module Util.Vector where
 
+import Control.Lens
 import Graphics.Rendering.OpenGL
 
 data Vec2 = Vec2
-    { x :: GLfloat
-    , y :: GLfloat
+    { _x :: GLfloat
+    , _y :: GLfloat
     } deriving (Eq, Show)
+makeLenses ''Vec2
 
 -- Basic operations
 (/+/) :: Vec2 -> Vec2 -> Vec2
@@ -40,3 +44,6 @@ cross :: Vec2 -> Vec2 -> GLfloat
 unitVec :: (Real a, Floating a) => a -> Vec2
 unitVec angle = Vec2 (aux cos) (aux sin)
     where aux f = (realToFrac . f $ angle)
+
+vZero :: Vec2
+vZero = Vec2 0 0
