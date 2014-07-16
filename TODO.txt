@@ -1,0 +1,11 @@
+-- Stuff to do
+
+    - Entity update, FRP-style?
+
+    - Setup screen
+        . Ortho
+        . pixel-units
+
+    - Implement and use Vec3s, z for depth
+
+    - Use textures

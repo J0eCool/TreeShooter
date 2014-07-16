@@ -4,6 +4,7 @@ module Engine.Entity where
 
 import Control.Lens
 
+import Engine.Rendering
 import Util.Vector
 
 data Entity = Entity
@@ -14,4 +15,7 @@ data Entity = Entity
     -- , _onUpdate :: Entity -> Entity
     }
 makeLenses ''Entity
-newEntity = Entity vZero vZero vZero (\_ -> return ())
+newEntity = Entity vZero vZero vZero drawEnt
+
+drawEnt :: Entity -> IO ()
+drawEnt entity = renderRect (entity ^. pos) (entity ^. size)
