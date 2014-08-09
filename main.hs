@@ -14,14 +14,12 @@ import Engine.Rendering
 import Engine.WorldState
 import Util.Vector
 
-initGL :: IO ()
 initGL = do
 	clearColor $= Color4 0 0 0 1
 	blend $= Enabled
 	blendFunc $= (SrcAlpha, OneMinusSrcAlpha)
 	cullFace $= Just Back
 
-driveNetwork :: (IO a -> IO (IO b)) -> IO (Maybe (IO a)) -> IO ()
 driveNetwork network driver = do
 	output <- driver
 	case output of
@@ -30,7 +28,6 @@ driveNetwork network driver = do
 			driveNetwork network driver
 		Nothing -> return ()
 
-render :: IO WorldState -> IO ()
 render world = do
 	w <- world
 	let
@@ -38,6 +35,7 @@ render world = do
 		m = (^. inputState . mouseClicked) $ w
 
 	clear [ColorBuffer]
+	loadIdentity
 
 	let
 		setC r g b = color $ Color3 r g (b :: GLfloat)
@@ -50,13 +48,16 @@ render world = do
 	let p = w ^. player
 	p ^. onDraw $ p
 
+	scale 0.003 0.003 (1 :: GLfloat)
+	color $ Color4 1 1 1 (1 :: GLfloat)
+	renderString Fixed8x16 $ "Woah hi dere"
+
 	flush
 	swapBuffers
 
-update :: IORef WorldState -> SignalGen (IO WorldState) (Signal (IO ()))
 update worldState = do
 	let world = readIORef worldState
-	signal <- delay world =<< stateful world worldUpdate
+	signal <- stateful world worldUpdate
 
 	return $ render <$> signal
 
